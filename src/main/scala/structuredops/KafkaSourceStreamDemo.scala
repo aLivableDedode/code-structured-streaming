@@ -26,11 +26,28 @@ object KafkaSourceStreamDemo {
       .option("subscribe", "ndc_gid_doc_sync")
 //      .option("subscribe", "test-struct-streaming")
       .option("startingOffsets", "earliest")
+      // 这个参数很重要 本地开发的时候因数值过大回导致一直卡住没法输出结果
+      .option("maxOffsetsPerTrigger", "200")
       .option("failOnDataLoss", "false")
       .load()
 
-    val query = df.writeStream
-      .outputMode("append")
+    val jsonSchema = "{\"type\":\"record\",\"name\":\"KafkaSourceTestSchema\",\"fields\":[{\"name\":\"op\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"index\",\"type\":[\"null\",\"string\"],\"default\":null},{\"name\":\"ts\",\"type\":[\"null\",\"long\"],\"default\":null},{\"name\":\"content\",\"type\":{\"type\":\"record\",\"name\":\"content\",\"fields\":[{\"name\":\"md5_doc_id\",\"type\":[\"null\",\"string\"],\"default\":null},{\"name\":\"doc_type_id\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"media_id\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"media_type_id\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"region_type_id\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"pub_time\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"folder_refs\",\"type\":{\"type\":\"array\",\"items\":{\"type\":\"record\",\"name\":\"folder_ref\",\"fields\":[{\"name\":\"folder_id\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"sentiment_type_id\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"tracking_time\",\"type\":[\"null\",\"int\"],\"default\":null},{\"name\":\"keywords_highlight\",\"type\":{\"type\":\"array\",\"name\":\"keywords_highlight\",\"items\":[\"string\",\"null\"],\"default\":null}}]}}}]}}]}"
+    val dataType = SchemaConverters.toSqlType(new Schema.Parser().parse(jsonSchema)).dataType
+    val dFrame: DataFrame = transformFromJSON(df)
+
+    var tempDF: DataFrame = dFrame
+      .select(from_json(col("record"), dataType).as("value"), col("recordTimestamp"), col("recordOffset"))
+      .select("value.*", "recordTimestamp", "recordOffset")
+
+    tempDF.mapPartitions(partition=>{
+      partition.map(row=>{
+        println(row.toString())
+        row
+      })
+    })(RowEncoder(tempDF.schema))
+
+    val query = tempDF
+      .writeStream
       .format("console")
       .start()
     query.awaitTermination()
